@@ -15,6 +15,15 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { AppConfig } from "../config/configuration";
 import { BuyPolicyDto } from "./dto/buy-policy.dto";
+import { ListPoliciesDto } from "./dto/list-policies.dto";
+
+export interface PolicyPage {
+  policies: StoredPolicy[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
 
 const FLIGHT_DELAY_COVERAGE_TYPE = 4;
 
@@ -275,8 +284,48 @@ export class PolicyService {
     return COVERAGE_TYPES;
   }
 
-  findByHolder(address: string): StoredPolicy[] {
-    return [...this.policies.values()].filter((p) => p.holder === address);
+  findByHolder(address: string, query: ListPoliciesDto = new ListPoliciesDto()): PolicyPage {
+    const { page, limit, isActive, coverageType, sortBy, sortDir } = query;
+
+    // ── 1. Filter ────────────────────────────────────────────────────────
+    let results = [...this.policies.values()].filter((p) => p.holder === address);
+
+    if (isActive !== undefined) {
+      results = results.filter((p) => p.isActive === isActive);
+    }
+
+    if (coverageType !== undefined) {
+      results = results.filter((p) => p.coverageType === coverageType);
+    }
+
+    // ── 2. Sort ──────────────────────────────────────────────────────────
+    // Map DTO field names onto StoredPolicy keys
+    const sortKey: keyof StoredPolicy =
+      sortBy === "createdAt"     ? "createdAt"
+      : sortBy === "expiresAt"  ? "expiresAt"
+      : sortBy === "coverageAmount" ? "coverageAmount"
+      : "premium";
+
+    results.sort((a, b) => {
+      const aVal = a[sortKey];
+      const bVal = b[sortKey];
+      // All sort keys are either string ISO dates, UNIX timestamps (number),
+      // or USDC decimal strings — lexicographic comparison works for ISO
+      // dates; numeric for expiresAt; bigint-string comparison for amounts.
+      const cmp =
+        typeof aVal === "number" && typeof bVal === "number"
+          ? aVal - bVal
+          : String(aVal).localeCompare(String(bVal));
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+
+    // ── 3. Paginate ──────────────────────────────────────────────────────
+    const total = results.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    const offset = (page - 1) * limit;
+    const paginated = results.slice(offset, offset + limit);
+
+    return { policies: paginated, total, page, limit, totalPages };
   }
 
   findById(id: string): StoredPolicy | undefined {
